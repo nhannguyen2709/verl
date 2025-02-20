@@ -60,16 +60,18 @@ class RLHFDataset(Dataset):
     We assume the dataset contains a column that contains prompts and other information
     """
 
-    def __init__(self,
-                 parquet_files: Union[str, List[str]],
-                 tokenizer: PreTrainedTokenizer,
-                 prompt_key='prompt',
-                 max_prompt_length=1024,
-                 filter_prompts=True,
-                 cache_dir='~/.cache/verl/rlhf',
-                 chat_template_func=None,
-                 return_raw_chat=False,
-                 truncation='error'):
+    def __init__(
+        self,
+        parquet_files: Union[str, List[str]],
+        tokenizer: PreTrainedTokenizer,
+        prompt_key="prompt",
+        max_prompt_length=1024,
+        filter_prompts=True,
+        cache_dir="~/.cache/verl/rlhf",
+        chat_template_func=None,
+        return_raw_chat=False,
+        truncation="error",
+    ):
         if not isinstance(parquet_files, (List, ListConfig)):
             parquet_files = [parquet_files]
 
@@ -94,9 +96,16 @@ class RLHFDataset(Dataset):
 
     def _download(self, use_origin_parquet=False):
         from verl.utils.fs import copy_local_path_from_hdfs
-        parquet_files = self.parquet_files if not use_origin_parquet else self.original_parquet_files
+
+        parquet_files = (
+            self.parquet_files
+            if not use_origin_parquet
+            else self.original_parquet_files
+        )
         for i, parquet_file in enumerate(parquet_files):
-            self.parquet_files[i] = copy_local_path_from_hdfs(src=parquet_file, cache_dir=self.cache_dir)
+            self.parquet_files[i] = copy_local_path_from_hdfs(
+                src=parquet_file, cache_dir=self.cache_dir
+            )
 
     def _read_files_and_tokenize(self):
         dataframes = []
@@ -104,27 +113,53 @@ class RLHFDataset(Dataset):
             # read parquet files and cache
             dataframe = pd.read_parquet(parquet_file)
             dataframes.append(dataframe)
-        self.dataframe = pd.concat(dataframes)
+        self.dataframe = pd.concat(dataframes).head(1024)
 
-        print(f'original dataset len: {len(self.dataframe)}')
+        print(f"original dataset len: {len(self.dataframe)}")
+
+        system_prompt = "# You are a helpful AI Assistant that provides well-reasoned and detailed responses. You first think about the reasoning process as an internal monologue and then provide the user with the answer. Respond in the following format: <think>\n...\n</think>\n<answer>\n...\n</answer>."
+
+        def make_conversation(problem: str) -> str:
+            return [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": problem},
+            ]
+
+        self.dataframe[self.prompt_key] = self.dataframe["problem"].apply(
+            make_conversation
+        )
 
         # filter out too long prompts
         tokenizer = self.tokenizer
         prompt_key = self.prompt_key
-        self.dataframe = self.dataframe[self.dataframe.apply(lambda doc: len(
-            tokenizer.apply_chat_template(doc[prompt_key], add_generation_prompt=True)) <= self.max_prompt_length,
-                                                             axis=1)]
+        self.dataframe = self.dataframe[
+            self.dataframe.apply(
+                lambda doc: len(
+                    tokenizer.apply_chat_template(
+                        doc[prompt_key], add_generation_prompt=True
+                    )
+                )
+                <= self.max_prompt_length,
+                axis=1,
+            )
+        ]
 
-        print(f'filter dataset len: {len(self.dataframe)}')
+        print(f"filter dataset len: {len(self.dataframe)}")
 
     def resume_dataset_state(self):
-        self.serialize_dataset = False if hasattr(self, 'original_parquet_files') else True
+        self.serialize_dataset = (
+            False if hasattr(self, "original_parquet_files") else True
+        )
         # resume dataframe if not it's serialized in data.pt
         if not self.serialize_dataset:
-            self._download(use_origin_parquet=True)  # download and resume from original parquet files
+            self._download(
+                use_origin_parquet=True
+            )  # download and resume from original parquet files
             self._read_files_and_tokenize()
         else:
-            print(r'old dataloader ckpt file is used, please train from scratch for better ckpt performance')
+            print(
+                r"old dataloader ckpt file is used, please train from scratch for better ckpt performance"
+            )
 
     def __len__(self):
         return len(self.dataframe)
@@ -137,24 +172,28 @@ class RLHFDataset(Dataset):
 
         chat = row_dict.pop(self.prompt_key)
 
-        prompt_with_chat_template = self.tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=False)
+        prompt_with_chat_template = self.tokenizer.apply_chat_template(
+            chat, add_generation_prompt=True, tokenize=False
+        )
 
-        input_ids, attention_mask = verl_F.tokenize_and_postprocess_data(prompt=prompt_with_chat_template,
-                                                                         tokenizer=self.tokenizer,
-                                                                         max_length=self.max_prompt_length,
-                                                                         pad_token_id=self.tokenizer.pad_token_id,
-                                                                         left_pad=True,
-                                                                         truncation=self.truncation)
+        input_ids, attention_mask = verl_F.tokenize_and_postprocess_data(
+            prompt=prompt_with_chat_template,
+            tokenizer=self.tokenizer,
+            max_length=self.max_prompt_length,
+            pad_token_id=self.tokenizer.pad_token_id,
+            left_pad=True,
+            truncation=self.truncation,
+        )
 
         position_ids = compute_position_id_with_mask(attention_mask)
 
-        row_dict['input_ids'] = input_ids[0]
-        row_dict['attention_mask'] = attention_mask[0]
-        row_dict['position_ids'] = position_ids[0]
+        row_dict["input_ids"] = input_ids[0]
+        row_dict["attention_mask"] = attention_mask[0]
+        row_dict["position_ids"] = position_ids[0]
 
         # encode prompts without chat template
         if self.return_raw_chat:
-            row_dict['raw_prompt'] = chat.tolist()
+            row_dict["raw_prompt"] = chat.tolist()
 
         # add index for each prompt
         index = row_dict.get("extra_info", {}).get("index", 0)
@@ -166,7 +205,7 @@ class RLHFDataset(Dataset):
         if not self.serialize_dataset:
             state = self.__dict__.copy()
 
-            if 'dataframe' in state:
-                del state['dataframe']
+            if "dataframe" in state:
+                del state["dataframe"]
             return state
         return self.__dict__.copy()
