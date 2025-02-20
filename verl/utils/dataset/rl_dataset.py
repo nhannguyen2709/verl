@@ -117,7 +117,7 @@ class RLHFDataset(Dataset):
 
         print(f"original dataset len: {len(self.dataframe)}")
 
-        system_prompt = "# You are a helpful AI Assistant that provides well-reasoned and detailed responses. You first think about the reasoning process as an internal monologue and then provide the user with the answer. Respond in the following format: <think>\n...\n</think>\n<answer>\n...\n</answer>."
+        system_prompt = "You are a helpful AI Assistant that provides well-reasoned and detailed responses. You first think about the reasoning process as an internal monologue and then provide the user with the answer. Respond in the following format: <think>\n...\n</think>\n<answer>\n...\n</answer>."
 
         def make_conversation(problem: str) -> str:
             return [
